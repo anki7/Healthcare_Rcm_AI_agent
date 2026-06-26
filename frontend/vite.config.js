@@ -3,17 +3,23 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  base: '/',
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: undefined
+      }
+    }
+  },
   server: {
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'https://healthcare-rcm-api.onrender.com',
         changeOrigin: true
       }
     }
-  },
-  build: {
-    outDir: 'dist',
-    sourcemap: false
   }
 })
