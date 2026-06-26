@@ -10,8 +10,8 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.database import get_db, Base, engine
-from models.patient import Patient, Claim, Denial
+from utils.database import get_db, create_tables, engine
+from models.patient import Patient, Claim, Denial, Base
 from mcp_servers.fhir_server import FHIRMCPServer
 from mcp_servers.coding_server import CodingMCPServer
 from mcp_servers.denial_server import DenialMCPServer
@@ -21,7 +21,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create tables
-Base.metadata.create_all(bind=engine)
+try:
+    create_tables()
+except Exception as e:
+    logger.error(f"Error creating tables: {e}")
 
 app = FastAPI(
     title="Healthcare RCM AI Agent",
@@ -29,10 +32,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "http://localhost:3000",
         "https://*.onrender.com",
         "https://*.vercel.app",
         "*"
@@ -42,6 +47,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialize servers
 fhir_server = FHIRMCPServer()
 coding_server = CodingMCPServer()
 denial_server = DenialMCPServer()
@@ -70,7 +76,6 @@ async def root():
 
 @app.get("/health")
 async def health_check(db: Session = Depends(get_db)):
-    # Test database connection
     try:
         db.execute("SELECT 1")
         db_status = "connected"
@@ -90,8 +95,17 @@ async def health_check(db: Session = Depends(get_db)):
     }
 
 @app.get("/api/patients")
-async def get_patients():
-    return {"patients": MOCK_PATIENTS, "count": len(MOCK_PATIENTS)}
+async def get_patients(db: Session = Depends(get_db)):
+    try:
+        # Try to get from database
+        patients = db.query(Patient).all()
+        if patients:
+            return {"patients": [p.__dict__ for p in patients], "count": len(patients), "source": "database"}
+    except:
+        pass
+    
+    # Fallback to mock data
+    return {"patients": MOCK_PATIENTS, "count": len(MOCK_PATIENTS), "source": "mock"}
 
 @app.get("/api/patients/{patient_id}")
 async def get_patient(patient_id: str):
@@ -108,10 +122,33 @@ async def get_denials(limit: int = 50):
 async def process_claim(claim_data: dict):
     claim_id = f"CLM{random.randint(10000, 99999)}"
     risk_score = random.randint(10, 90)
+    
+    # Try to save to database
+    try:
+        from utils.database import SessionLocal
+        db = SessionLocal()
+        new_claim = Claim(
+            id=claim_id,
+            patient_id=claim_data.get("patient_id"),
+            procedure_codes=claim_data.get("procedure_codes", []),
+            diagnosis_codes=claim_data.get("diagnosis_codes", []),
+            amount=claim_data.get("amount", 0),
+            status="submitted" if risk_score < 70 else "flagged_for_review"
+        )
+        db.add(new_claim)
+        db.commit()
+        db.refresh(new_claim)
+        db.close()
+        saved = True
+    except Exception as e:
+        saved = False
+        logger.error(f"Error saving claim: {e}")
+    
     return {
         "claim_id": claim_id,
         "status": "submitted" if risk_score < 70 else "flagged_for_review",
         "risk_score": risk_score,
+        "saved_to_db": saved,
         "timestamp": datetime.now().isoformat()
     }
 
