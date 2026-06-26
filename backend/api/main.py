@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 import uvicorn
 import logging
 from datetime import datetime
@@ -7,9 +8,10 @@ import random
 import sys
 import os
 
-# Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from utils.database import get_db, Base, engine
+from models.patient import Patient, Claim, Denial
 from mcp_servers.fhir_server import FHIRMCPServer
 from mcp_servers.coding_server import CodingMCPServer
 from mcp_servers.denial_server import DenialMCPServer
@@ -18,11 +20,23 @@ from agents.revenue_optimizer import RevenueOptimizer
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Healthcare RCM AI Agent", version="1.0.0")
+# Create tables
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(
+    title="Healthcare RCM AI Agent",
+    description="Advanced Revenue Cycle Management System",
+    version="1.0.0"
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://*.onrender.com",
+        "https://*.vercel.app",
+        "*"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -55,12 +69,24 @@ async def root():
     return {"status": "healthy", "message": "Healthcare RCM AI Agent", "timestamp": datetime.now().isoformat()}
 
 @app.get("/health")
-async def health_check():
+async def health_check(db: Session = Depends(get_db)):
+    # Test database connection
+    try:
+        db.execute("SELECT 1")
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0",
-        "services": {"fhir_server": "running", "coding_server": "running", "denial_server": "running"}
+        "services": {
+            "fhir_server": "running",
+            "coding_server": "running",
+            "denial_server": "running"
+        },
+        "database": db_status
     }
 
 @app.get("/api/patients")
@@ -72,7 +98,7 @@ async def get_patient(patient_id: str):
     patient = next((p for p in MOCK_PATIENTS if p["id"] == patient_id), None)
     if not patient:
         raise HTTPException(status_code=404, detail=f"Patient {patient_id} not found")
-    return {"patient": patient, "acuity": "STABLE", "timestamp": datetime.now().isoformat()}
+    return {"patient": patient, "timestamp": datetime.now().isoformat()}
 
 @app.get("/api/denials")
 async def get_denials(limit: int = 50):
@@ -103,7 +129,7 @@ if __name__ == "__main__":
     print("=" * 50)
     print("🏥 Healthcare RCM AI Agent")
     print("=" * 50)
-    print("🚀 Starting server at http://localhost:8000")
-    print("📚 API Docs: http://localhost:8000/docs")
+    print("🚀 Starting server at http://0.0.0.0:8000")
+    print("📚 API Docs: http://0.0.0.0:8000/docs")
     print("=" * 50)
-    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("api.main:app", host="0.0.0.0", port=8000, reload=False)
